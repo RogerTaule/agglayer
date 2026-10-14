@@ -1,0 +1,18 @@
+[package]
+name = "agglayer-zisk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror.workspace = true
+zisk-core.workspace = true
+zisk-sdk.workspace = true
+zisk-transpiler-riscv.workspace = true
+ziskemu.workspace = true
+
+[dev-dependencies]
+toml.workspace = true
