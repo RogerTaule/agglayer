@@ -30,6 +30,7 @@ pub mod core {
 }
 
 pub mod error;
+pub mod zisk;
 
 /// ELF of the pessimistic proof program
 pub const ELF: &[u8] = agglayer_elf_build::elf_bytes!();

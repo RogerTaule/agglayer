@@ -7,12 +7,7 @@
 use zisk_core::ZiskRom;
 use zisk_sdk::GuestProgram;
 pub use zisk_sdk::{HashMode, ProgramVK, ZiskStdin};
-use zisk_transpiler_riscv::Riscv2zisk;
 use ziskemu::{EmuOptions, ZiskEmulator};
-
-/// ZisK version the host crates and the guest program are built with. Keep in
-/// sync with the `zisk-*` versions pinned in the workspace.
-pub const ZISK_VERSION: &str = "1.3.2-alpha";
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -34,8 +29,7 @@ pub struct Executor {
 impl Executor {
     /// Transpiles `elf` into a ZisK ROM, once for all executions.
     pub fn new(elf: &[u8]) -> Result<Self, Error> {
-        let rom = Riscv2zisk::new(elf)
-            .run()
+        let rom = zisk_transpiler_common::program2rom(elf)
             .map_err(|error| Error::Transpile(error.to_string()))?;
         Ok(Self { rom })
     }
@@ -51,7 +45,14 @@ impl Executor {
         std::panic::catch_unwind(|| {
             ZiskEmulator::process_rom(&self.rom, &inputs, &EmuOptions::default(), None::<fn(_)>)
         })
-        .map_err(|_| Error::Emulation("the guest program panicked".to_string()))?
+        .map_err(|payload| {
+            let message = payload
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| payload.downcast_ref::<&str>().copied())
+                .unwrap_or("unknown cause");
+            Error::Emulation(format!("the guest program panicked: {message}"))
+        })?
         .map_err(|error| Error::Emulation(format!("{error:?}")))
     }
 }
@@ -65,23 +66,33 @@ pub fn program_vk(elf: &[u8], hash_mode: HashMode) -> Result<ProgramVK, Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    /// The ZisK source both lockfiles must resolve: the branch the manifests
+    /// follow, at the commit the cached ELF is built from.
+    const ZISK_SOURCE: &str = "git+https://github.com/0xPolygonHermez/zisk.git\
+                               ?branch=pre-develop-1.4.0-alpha#fa82851b";
 
-    fn pinned_version(manifest: &str, path: &[&str]) -> String {
-        let manifest: toml::Value = toml::from_str(manifest).unwrap();
-        let value = path.iter().fold(&manifest, |value, key| &value[key]);
-        value.as_str().unwrap().trim_start_matches('=').to_string()
-    }
-
-    /// `ZISK_VERSION` is recorded in every stored proof: it must match the
-    /// ZisK crates the node is built with.
+    /// The node and the guest program must be built with the same ZisK
+    /// commit: the two lockfiles are resolved separately, so a `cargo update`
+    /// in only one of them would let them drift apart.
     #[test]
-    fn zisk_version_matches_the_pinned_crates() {
-        let workspace = include_str!("../../../../Cargo.toml");
+    fn host_and_guest_lock_the_same_zisk_commit() {
+        for lock in [
+            include_str!("../../../../Cargo.lock"),
+            include_str!("../../../pessimistic-proof-program/zisk/Cargo.lock"),
+        ] {
+            let lock: toml::Value = toml::from_str(lock).unwrap();
+            let mut zisk_sources = lock["package"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|package| package.get("source")?.as_str())
+                .filter(|source| source.contains("0xPolygonHermez/zisk.git"))
+                .peekable();
 
-        assert_eq!(
-            pinned_version(workspace, &["workspace", "dependencies", "zisk-sdk"]),
-            ZISK_VERSION
-        );
+            assert!(zisk_sources.peek().is_some(), "no ZisK package locked");
+            for source in zisk_sources {
+                assert!(source.starts_with(ZISK_SOURCE), "locked at {source}");
+            }
+        }
     }
 }
